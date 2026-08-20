@@ -1,0 +1,45 @@
+import cv2
+import subprocess
+
+print("=" * 50)
+print("LISTANDO TODAS AS CÂMERAS DO WINDOWS:")
+print("=" * 50)
+
+# 1. Pede ao Windows os nomes das câmeras conectadas
+try:
+    cmd = 'powershell "Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPClass -eq \'Camera\' -or $_.PNPClass -eq \'Image\' } | Select-Object -ExpandProperty Name"'
+    result = subprocess.check_output(cmd, shell=True, text=True, errors='ignore').strip()
+    if result:
+        for name in result.split('\n'):
+            if name.strip():
+                print(f" -> {name.strip()}")
+    else:
+        print("Nenhuma câmera listada pelo sistema.")
+except Exception as e:
+    print(f"Erro ao listar nomes: {e}")
+
+print("\n" + "=" * 50)
+print("TESTANDO OS ÍNDICES (0 a 4) COM PRÉVIA AO VIVO...")
+print("Pressione ESPAÇO ou qualquer tecla para testar a próxima câmera.")
+print("=" * 50)
+
+# 2. Testa os índices e mostra a imagem na tela
+for index in range(5):
+    # Testa primeiro com DirectShow e depois com Media Foundation
+    for api_name, api in [("DirectShow", cv2.CAP_DSHOW), ("Media Foundation", cv2.CAP_MSMF)]:
+        cap = cv2.VideoCapture(index, api)
+        if cap.isOpened():
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                # Escreve o índice na própria imagem
+                texto = f"Indice: {index} ({api_name})"
+                cv2.putText(frame, texto, (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                cv2.putText(frame, "Pressione ESPACO para a proxima", (30, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+                print(f"[SUCESSO] Câmera encontrada no ÍNDICE {index} ({api_name})")
+                cv2.imshow("TESTE DE CAMERA", frame)
+                cv2.waitKey(0) # Espera você apertar uma tecla para ir para a próxima
+                cv2.destroyAllWindows()
+            cap.release()
+
+print("\nTeste concluído! Anote o número da câmera onde você se viu.")
