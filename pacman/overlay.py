@@ -10,21 +10,22 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-
 # ============================================================
 # CONFIGURAÇÕES
 # ============================================================
 
 pyautogui.PAUSE = 0.0
 
-GAME_WIDTH = 1280
-GAME_HEIGHT = 720
+# Inicializa Tkinter para pegar a resolução real do monitor
+root = tk.Tk()
+SCREEN_WIDTH = root.winfo_screenwidth()
+SCREEN_HEIGHT = root.winfo_screenheight()
 
-CENTER_X = GAME_WIDTH // 2
-CENTER_Y = GAME_HEIGHT // 2
+CENTER_X = SCREEN_WIDTH // 2
+CENTER_Y = SCREEN_HEIGHT // 2
 
-BOX_SIZE = 250
-MARGIN = 30
+BOX_SIZE = 260       # TAMANHO AUMENTADO (era 180)
+MARGIN = 15         # Distância da borda da tela
 
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
@@ -32,8 +33,9 @@ CAMERA_HEIGHT = 480
 DETECTION_WIDTH = 480
 DETECTION_HEIGHT = 270
 
-FRAME_DELAY = 33
-DETECTION_EVERY_N_FRAMES = 2
+# Latência reduzida para resposta imediata
+FRAME_DELAY = 15
+DETECTION_EVERY_N_FRAMES = 1
 
 frame_counter = 0
 last_results = None
@@ -49,7 +51,6 @@ MODEL_URL = (
     "hand_landmarker/hand_landmarker/float16/1/"
     "hand_landmarker.task"
 )
-
 MODEL_PATH = "hand_landmarker.task"
 
 if not os.path.exists(MODEL_PATH):
@@ -59,25 +60,23 @@ if not os.path.exists(MODEL_PATH):
 
 
 # ============================================================
-# MEDIAPIPE
+# MEDIAPIPE (SENSIBILIDADE AJUSTADA)
 # ============================================================
 
 base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
-
 options = vision.HandLandmarkerOptions(
     base_options=base_options,
     running_mode=vision.RunningMode.VIDEO,
     num_hands=2,
-    min_hand_detection_confidence=0.5,
-    min_hand_presence_confidence=0.5,
-    min_tracking_confidence=0.5
+    min_hand_detection_confidence=0.3,    # Mais sensível para detectar a mão
+    min_hand_presence_confidence=0.3,     # Mantém o rastreio mesmo em movimento rápido
+    min_tracking_confidence=0.3
 )
-
 detector = vision.HandLandmarker.create_from_options(options)
 
 
 # ============================================================
-# TECLAS E QUADRADOS
+# TECLAS E POSICIONAMENTO DAS BORDAS (CRUZ)
 # ============================================================
 
 KEY_MAP = {
@@ -88,40 +87,44 @@ KEY_MAP = {
 }
 
 corners = {
+    # Cima: Topo no Meio
     'up': {
         'x': CENTER_X - BOX_SIZE // 2,
         'y': MARGIN,
         'w': BOX_SIZE,
         'h': BOX_SIZE,
         'rgb': (0, 255, 0),
-        'hex': '#00FF00',
+        'hex': '#00FF00',    # Verde
         'active': False
     },
+    # Baixo: Fundo no Meio
     'down': {
         'x': CENTER_X - BOX_SIZE // 2,
-        'y': GAME_HEIGHT - BOX_SIZE - MARGIN,
+        'y': SCREEN_HEIGHT - BOX_SIZE - MARGIN,
         'w': BOX_SIZE,
         'h': BOX_SIZE,
         'rgb': (255, 0, 0),
-        'hex': '#FF0000',
+        'hex': '#FF0000',    # Vermelho
         'active': False
     },
+    # Esquerda: Lateral Esquerda no Meio
     'left': {
         'x': MARGIN,
         'y': CENTER_Y - BOX_SIZE // 2,
         'w': BOX_SIZE,
         'h': BOX_SIZE,
         'rgb': (255, 255, 0),
-        'hex': '#FFFF00',
+        'hex': '#FFFF00',    # Amarelo
         'active': False
     },
+    # Direita: Lateral Direita no Meio
     'right': {
-        'x': GAME_WIDTH - BOX_SIZE - MARGIN,
+        'x': SCREEN_WIDTH - BOX_SIZE - MARGIN,
         'y': CENTER_Y - BOX_SIZE // 2,
         'w': BOX_SIZE,
         'h': BOX_SIZE,
         'rgb': (0, 136, 255),
-        'hex': '#0088FF',
+        'hex': '#0088FF',    # Azul
         'active': False
     }
 }
@@ -136,27 +139,24 @@ last_states = {key: False for key in KEY_MAP}
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-cap.set(cv2.CAP_PROP_FPS, 30)
+cap.set(cv2.CAP_PROP_FPS, 60)
 
 if not cap.isOpened():
     print("ERRO: Não foi possível abrir a câmera!")
     detector.close()
     exit()
 
-print("Câmera aberta com sucesso!")
-
 
 # ============================================================
-# JANELA
+# JANELA TRANSPARENTE
 # ============================================================
 
-root = tk.Tk()
-root.title("Air Guitar Hero Overlay")
-root.geometry(f"{GAME_WIDTH}x{GAME_HEIGHT}+0+0")
+root.title("Air Control Overlay")
+root.geometry(f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}+0+0")
 root.overrideredirect(True)
 root.wm_attributes("-topmost", True)
 
-# Cor chave para transparência alterada para Magenta (evita cortar tons escuros da câmera)
+# Cor de transparência para o restante da tela
 TRANS_COLOR = '#000001'
 root.config(bg=TRANS_COLOR)
 root.wm_attributes("-transparentcolor", TRANS_COLOR)
@@ -168,8 +168,8 @@ root.wm_attributes("-transparentcolor", TRANS_COLOR)
 
 canvas = tk.Canvas(
     root,
-    width=GAME_WIDTH,
-    height=GAME_HEIGHT,
+    width=SCREEN_WIDTH,
+    height=SCREEN_HEIGHT,
     bg=TRANS_COLOR,
     highlightthickness=0
 )
@@ -177,7 +177,7 @@ canvas.pack(fill="both", expand=True)
 
 
 # ============================================================
-# ELEMENTOS DOS CANTOS
+# ELEMENTOS VISUAIS
 # ============================================================
 
 tk_images = {}
@@ -193,25 +193,28 @@ ARROWS = {
 }
 
 for key, c in corners.items():
+    # Fundo com imagem da câmera
     canvas_image_ids[key] = canvas.create_image(c['x'], c['y'], anchor='nw')
-    
+
+    # Borda colorida
     canvas_rect_ids[key] = canvas.create_rectangle(
         c['x'], c['y'],
         c['x'] + c['w'], c['y'] + c['h'],
-        outline=c['hex'], width=4
+        outline=c['hex'], width=5
     )
 
+    # Seta maior e centralizada
     canvas_text_ids[key] = canvas.create_text(
         c['x'] + c['w'] // 2,
         c['y'] + c['h'] // 2,
         text=ARROWS[key],
         fill=c['hex'],
-        font=("Arial", 100, "bold")
+        font=("Arial", 90, "bold")
     )
 
 
 # ============================================================
-# FECHAR
+# FECHAR (Pressione ESC)
 # ============================================================
 
 def on_close(event=None):
@@ -231,12 +234,15 @@ root.bind("<Escape>", on_close)
 # LOOP PRINCIPAL
 # ============================================================
 
+# Pontos de contato da mão: Polegar(4), Indicador(8), Médio(12), Anelar(16), Mindinho(20) e Centro da Palma(9)
+HAND_TOUCH_POINTS = [4, 8, 12, 16, 20, 9]
+
 def update_frame():
     global last_timestamp, frame_counter, last_results
 
     ret, frame = cap.read()
     if not ret:
-        root.after(100, update_frame)
+        root.after(30, update_frame)
         return
 
     frame = cv2.flip(frame, 1)
@@ -257,21 +263,23 @@ def update_frame():
 
     results = last_results
 
-    # Reset de estados atétil
+    # Reset de status
     for key in corners:
         corners[key]['active'] = False
 
+    # Detecção multi-pontos da mão (ultra responsivo)
     if results is not None and results.hand_landmarks:
         for hand_landmarks in results.hand_landmarks:
-            index_tip = hand_landmarks[8]
-            hand_x = int(index_tip.x * GAME_WIDTH)
-            hand_y = int(index_tip.y * GAME_HEIGHT)
+            for pt_id in HAND_TOUCH_POINTS:
+                pt = hand_landmarks[pt_id]
+                hand_x = int(pt.x * SCREEN_WIDTH)
+                hand_y = int(pt.y * SCREEN_HEIGHT)
 
-            for key, c in corners.items():
-                if (c['x'] <= hand_x <= c['x'] + c['w']) and (c['y'] <= hand_y <= c['y'] + c['h']):
-                    c['active'] = True
+                for key, c in corners.items():
+                    if (c['x'] <= hand_x <= c['x'] + c['w']) and (c['y'] <= hand_y <= c['y'] + c['h']):
+                        c['active'] = True
 
-    # Trata as entradas do teclado
+    # Pressionamento das teclas
     for key, c in corners.items():
         is_active = c['active']
         key_to_press = KEY_MAP[key]
@@ -283,29 +291,25 @@ def update_frame():
             pyautogui.keyUp(key_to_press)
             last_states[key] = False
 
-    # Redimensiona frame principal
-    display_frame = cv2.resize(frame, (GAME_WIDTH, GAME_HEIGHT), interpolation=cv2.INTER_LINEAR)
+    # Redimensiona para resolução da tela e recorta as posições corretas
+    display_frame = cv2.resize(frame, (SCREEN_WIDTH, SCREEN_HEIGHT), interpolation=cv2.INTER_LINEAR)
     frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
 
-    # Atualiza as regiões dos cantos com a imagem do vídeo
     for key, c in corners.items():
         crop = frame_rgb[c['y']:c['y'] + c['h'], c['x']:c['x'] + c['w']].copy()
 
         if c['active']:
             overlay_color = np.full_like(crop, c['rgb'])
             crop = cv2.addWeighted(crop, 0.6, overlay_color, 0.4, 0)
-
             canvas.itemconfig(canvas_rect_ids[key], outline="#FFFFFF", width=7)
             canvas.itemconfig(canvas_text_ids[key], fill="white")
         else:
-            canvas.itemconfig(canvas_rect_ids[key], outline=c['hex'], width=4)
+            canvas.itemconfig(canvas_rect_ids[key], outline=c['hex'], width=5)
             canvas.itemconfig(canvas_text_ids[key], fill=c['hex'])
 
-        # Converte a matriz NumPy/OpenCV para o formato compatível com Tkinter
+        # Atualiza o frame do vídeo
         img_pil = Image.fromarray(crop)
         img_tk = ImageTk.PhotoImage(image=img_pil)
-
-        # Salva referência e atualiza o Canvas
         tk_images[key] = img_tk
         canvas.itemconfig(canvas_image_ids[key], image=img_tk)
 

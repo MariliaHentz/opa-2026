@@ -1,45 +1,261 @@
+import os
+import time
+import threading
+import urllib.request
 import cv2
-import subprocess
+import numpy as np
+import tkinter as tk
+from PIL import Image, ImageTk
+import pydirectinput
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
-print("=" * 50)
-print("LISTANDO TODAS AS CÂMERAS DO WINDOWS:")
-print("=" * 50)
+# Configurações de Input
+pydirectinput.PAUSE = 0.0
+pydirectinput.FAILSAFE = False
 
-# 1. Pede ao Windows os nomes das câmeras conectadas
-try:
-    cmd = 'powershell "Get-CimInstance Win32_PnPEntity | Where-Object { $_.PNPClass -eq \'Camera\' -or $_.PNPClass -eq \'Image\' } | Select-Object -ExpandProperty Name"'
-    result = subprocess.check_output(cmd, shell=True, text=True, errors='ignore').strip()
-    if result:
-        for name in result.split('\n'):
-            if name.strip():
-                print(f" -> {name.strip()}")
-    else:
-        print("Nenhuma câmera listada pelo sistema.")
-except Exception as e:
-    print(f"Erro ao listar nomes: {e}")
+# ============================================================
+# CONFIGURAÇÕES DE SENSIBILIDADE & GEOMETRIA
+# ============================================================
+GAME_WIDTH = 1280
+GAME_HEIGHT = 720
+BOX_SIZE = 240
 
-print("\n" + "=" * 50)
-print("TESTANDO OS ÍNDICES (0 a 4) COM PRÉVIA AO VIVO...")
-print("Pressione ESPAÇO ou qualquer tecla para testar a próxima câmera.")
-print("=" * 50)
+# Margem extra invisível ao redor de cada caixa (torna o acerto mais fácil)
+HITBOX_PADDING = 30  
 
-# 2. Testa os índices e mostra a imagem na tela
-for index in range(5):
-    # Testa primeiro com DirectShow e depois com Media Foundation
-    for api_name, api in [("DirectShow", cv2.CAP_DSHOW), ("Media Foundation", cv2.CAP_MSMF)]:
-        cap = cv2.VideoCapture(index, api)
-        if cap.isOpened():
-            ret, frame = cap.read()
-            if ret and frame is not None:
-                # Escreve o índice na própria imagem
-                texto = f"Indice: {index} ({api_name})"
-                cv2.putText(frame, texto, (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                cv2.putText(frame, "Pressione ESPACO para a proxima", (30, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+# Tempo mínimo (em segundos) que a tecla fica segurada após um toque rápido
+MIN_PRESS_TIME = 0.07  
 
-                print(f"[SUCESSO] Câmera encontrada no ÍNDICE {index} ({api_name})")
-                cv2.imshow("TESTE DE CAMERA", frame)
-                cv2.waitKey(0) # Espera você apertar uma tecla para ir para a próxima
-                cv2.destroyAllWindows()
-            cap.release()
+CAM_W = 640
+CAM_H = 480
+DETECTION_WIDTH = 320
+DETECTION_HEIGHT = 240
 
-print("\nTeste concluído! Anote o número da câmera onde você se viu.")
+SCALE_X = CAM_W / GAME_WIDTH
+SCALE_Y = CAM_H / GAME_HEIGHT
+
+KEY_MAP = {
+    'topLeft': 'a',
+    'bottomLeft': 's',
+    'topRight': 'j',
+    'bottomRight': 'k'
+}
+
+corners = {
+    'topLeft': {'x': 40, 'y': 40, 'w': BOX_SIZE, 'h': BOX_SIZE, 'rgb': (0, 255, 0), 'hex': '#00FF00', 'active': False},
+    'topRight': {'x': GAME_WIDTH - BOX_SIZE - 40, 'y': 40, 'w': BOX_SIZE, 'h': BOX_SIZE, 'rgb': (255, 255, 0), 'hex': '#FFFF00', 'active': False},
+    'bottomLeft': {'x': 40, 'y': GAME_HEIGHT - BOX_SIZE - 40, 'w': BOX_SIZE, 'h': BOX_SIZE, 'rgb': (255, 0, 0), 'hex': '#FF0000', 'active': False},
+    'bottomRight': {'x': GAME_WIDTH - BOX_SIZE - 40, 'y': GAME_HEIGHT - BOX_SIZE - 40, 'w': BOX_SIZE, 'h': BOX_SIZE, 'rgb': (0, 136, 255), 'hex': '#0088FF', 'active': False}
+}
+
+for key, c in corners.items():
+    c['cam_x1'] = int(c['x'] * SCALE_X)
+    c['cam_y1'] = int(c['y'] * SCALE_Y)
+    c['cam_x2'] = int((c['x'] + c['w']) * SCALE_X)
+    c['cam_y2'] = int((c['y'] + c['h']) * SCALE_Y)
+
+last_states = {k: False for k in KEY_MAP}
+last_press_time = {k: 0.0 for k in KEY_MAP}
+
+# Pontos da mão que ativam a nota:
+# 4 (Polegar), 8 (Indicador), 12 (Médio), 16 (Anelar), 20 (Mínimo), 0 (Pulso), 9 (Palma)
+HAND_POINTS_TO_CHECK = [0, 4, 8, 12, 16, 20, 9]
+
+# ============================================================
+# MODELO MEDIAPIPE
+# ============================================================
+MODEL_PATH = "hand_landmarker.task"
+MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+
+if not os.path.exists(MODEL_PATH):
+    urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+
+# ============================================================
+# CÂMERA EM BACKGROUND
+# ============================================================
+class FastCamera:
+    def __init__(self, src=0):
+        self.cap = cv2.VideoCapture(src, cv2.CAP_DSHOW)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_W)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_H)
+        self.cap.set(cv2.CAP_PROP_FPS, 60)
+
+        self.ret, self.frame = self.cap.read()
+        self.running = True
+        self.lock = threading.Lock()
+        
+        self.thread = threading.Thread(target=self._reader, daemon=True)
+        self.thread.start()
+
+    def _reader(self):
+        while self.running:
+            ret, frame = self.cap.read()
+            if ret:
+                with self.lock:
+                    self.frame = frame
+
+    def read(self):
+        with self.lock:
+            if self.frame is not None:
+                return True, self.frame.copy()
+            return False, None
+
+    def release(self):
+        self.running = False
+        self.thread.join(timeout=1.0)
+        self.cap.release()
+
+cam = FastCamera(0)
+
+# ============================================================
+# MEDIAPIPE (Sensibilidade Aumentada para 0.3)
+# ============================================================
+base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
+options = vision.HandLandmarkerOptions(
+    base_options=base_options,
+    running_mode=vision.RunningMode.VIDEO,
+    num_hands=2,
+    min_hand_detection_confidence=0.3, # Mais tolerante a sombras/movimento rápido
+    min_hand_presence_confidence=0.3,
+    min_tracking_confidence=0.3
+)
+detector = vision.HandLandmarker.create_from_options(options)
+
+# ============================================================
+# JANELA OVERLAY TKINTER
+# ============================================================
+root = tk.Tk()
+root.title("Air Guitar Hero Overlay")
+root.geometry(f"{GAME_WIDTH}x{GAME_HEIGHT}+0+0")
+root.overrideredirect(True)
+root.wm_attributes("-topmost", True)
+root.config(bg="black")
+root.wm_attributes("-transparentcolor", "black")
+
+canvas = tk.Canvas(root, width=GAME_WIDTH, height=GAME_HEIGHT, bg="black", highlightthickness=0)
+canvas.pack(fill="both", expand=True)
+
+tk_images = {}
+canvas_image_ids = {}
+canvas_rect_ids = {}
+
+for key, c in corners.items():
+    canvas_image_ids[key] = canvas.create_image(c['x'], c['y'], anchor='nw')
+    canvas_rect_ids[key] = canvas.create_rectangle(
+        c['x'], c['y'], c['x'] + c['w'], c['y'] + c['h'],
+        outline=c['hex'], width=3
+    )
+
+def on_close(event=None):
+    for key, key_char in KEY_MAP.items():
+        if last_states[key]:
+            pydirectinput.keyUp(key_char)
+    cam.release()
+    detector.close()
+    root.destroy()
+
+root.bind("<Escape>", on_close)
+
+# ============================================================
+# LOOP PRINCIPAL
+# ============================================================
+last_timestamp = 0
+
+def update_frame():
+    global last_timestamp
+    current_time = time.perf_counter()
+
+    ret, frame = cam.read()
+    if not ret or frame is None:
+        root.after(5, update_frame)
+        return
+
+    frame = cv2.flip(frame, 1)
+
+    small_frame = cv2.resize(frame, (DETECTION_WIDTH, DETECTION_HEIGHT), interpolation=cv2.INTER_NEAREST)
+    rgb_detection = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+
+    timestamp = int(current_time * 1000)
+    if timestamp <= last_timestamp:
+        timestamp = last_timestamp + 1
+    last_timestamp = timestamp
+
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_detection)
+    results = detector.detect_for_video(mp_image, timestamp)
+
+    # Reseta flag do frame atual
+    for key in corners:
+        corners[key]['active'] = False
+
+    finger_points_cam = []
+
+    # Checagem de colisão ampliada
+    if results.hand_landmarks:
+        for hand in results.hand_landmarks:
+            for pt_idx in HAND_POINTS_TO_CHECK:
+                pt = hand[pt_idx]
+                
+                hand_screen_x = int(pt.x * GAME_WIDTH)
+                hand_screen_y = int(pt.y * GAME_HEIGHT)
+
+                if pt_idx in [4, 8, 12]:  # Guarda pontos visíveis na câmera
+                    cam_fx = int(pt.x * CAM_W)
+                    cam_fy = int(pt.y * CAM_H)
+                    finger_points_cam.append((cam_fx, cam_fy))
+
+                for key, c in corners.items():
+                    # Aplica o HITBOX_PADDING para expandir a área de ativação
+                    min_x = c['x'] - HITBOX_PADDING
+                    max_x = c['x'] + c['w'] + HITBOX_PADDING
+                    min_y = c['y'] - HITBOX_PADDING
+                    max_y = c['y'] + c['h'] + HITBOX_PADDING
+
+                    if (min_x <= hand_screen_x <= max_x) and (min_y <= hand_screen_y <= max_y):
+                        corners[key]['active'] = True
+
+    # Controle de Teclas com Buffer de Tempo (MIN_PRESS_TIME)
+    for key, c in corners.items():
+        is_active = c['active']
+        char = KEY_MAP[key]
+
+        if is_active:
+            last_press_time[key] = current_time
+            if not last_states[key]:
+                pydirectinput.keyDown(char)
+                last_states[key] = True
+                canvas.itemconfig(canvas_rect_ids[key], outline="#FFFFFF", width=6)
+        else:
+            # Só solta a tecla se já passou o tempo mínimo de sustentação
+            if last_states[key] and (current_time - last_press_time[key] >= MIN_PRESS_TIME):
+                pydirectinput.keyUp(char)
+                last_states[key] = False
+                canvas.itemconfig(canvas_rect_ids[key], outline=c['hex'], width=3)
+
+    # Desenha os pontos dos dedos
+    for (fx, fy) in finger_points_cam:
+        cv2.circle(frame, (fx, fy), 7, (0, 255, 255), -1)
+
+    # Renderização leve das 4 caixas
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    for key, c in corners.items():
+        crop = frame_rgb[c['cam_y1']:c['cam_y2'], c['cam_x1']:c['cam_x2']]
+        crop_display = cv2.resize(crop, (c['w'], c['h']), interpolation=cv2.INTER_LINEAR)
+
+        if c['active']:
+            overlay = np.full_like(crop_display, c['rgb'])
+            crop_display = cv2.addWeighted(crop_display, 0.6, overlay, 0.4, 0)
+
+        crop_display[crop_display == 0] = 1
+
+        img = ImageTk.PhotoImage(image=Image.fromarray(crop_display))
+        tk_images[key] = img
+        canvas.itemconfig(canvas_image_ids[key], image=img)
+
+    root.after(1, update_frame)
+
+root.after(0, update_frame)
+root.mainloop()
