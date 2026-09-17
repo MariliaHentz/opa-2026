@@ -1,5 +1,6 @@
 import os
 import time
+import math
 import urllib.request
 import cv2
 import numpy as np
@@ -144,21 +145,24 @@ last_states = {
     for key in KEY_MAP
 }
 
+# Guarda o estado anterior da pinça para cada tecla
+pinca_anterior = {
+    key: False
+    for key in KEY_MAP
+}
+
 
 # ============================================================
 # CÂMERA
 # ============================================================
 
-# ABRE A CÂMERA APENAS UMA VEZ
 cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
 
-# Configura depois de abrir
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
 cap.set(cv2.CAP_PROP_FPS, 30)
 
 
-# Verifica se abriu corretamente
 if not cap.isOpened():
     print("ERRO: Não foi possível abrir a câmera!")
     print("Tente fechar outros programas que estejam usando a webcam.")
@@ -249,9 +253,7 @@ for key, c in corners.items():
 
 def on_close(event=None):
 
-    # Solta todas as teclas
     for key, key_to_press in KEY_MAP.items():
-
         if last_states[key]:
             pyautogui.keyUp(key_to_press)
             last_states[key] = False
@@ -292,6 +294,15 @@ def update_frame():
 
 
     # --------------------------------------------------------
+    # DESENHA A LINHA PONTILHADA NO MEIO DA TELA
+    # --------------------------------------------------------
+    h_f, w_f, _ = frame.shape
+    meio_x_frame = int(w_f / 2)
+    for y_pos in range(0, h_f, 20):
+        cv2.line(frame, (meio_x_frame, y_pos), (meio_x_frame, y_pos + 10), (255, 255, 255), 2)
+
+
+    # --------------------------------------------------------
     # FRAME PEQUENO PARA MEDIAPIPE
     # --------------------------------------------------------
 
@@ -327,8 +338,6 @@ def update_frame():
 
     frame_counter += 1
 
-    # Faz a primeira detecção imediatamente.
-    # Depois detecta a cada N frames.
     if (
         last_results is None
         or frame_counter % DETECTION_EVERY_N_FRAMES == 0
@@ -345,38 +354,49 @@ def update_frame():
         )
 
 
-    # Usa o último resultado disponível
     results = last_results
 
 
     # --------------------------------------------------------
-    # RESETA OS CANTOS
+    # RESETA OS CANTOS E ESTADOS DE ATIVAÇÃO
     # --------------------------------------------------------
 
     for key in corners:
         corners[key]['active'] = False
 
 
+    # Dicionário temporário para verificar se a pinça ocorreu em cada canto neste frame
+    pinca_atual_frame = {key: False for key in KEY_MAP}
+
+
     # --------------------------------------------------------
-    # VERIFICA O DEDO INDICADOR
+    # VERIFICAÇÃO DOS LANDMARKS E DA PINÇA
     # --------------------------------------------------------
 
     if results is not None and results.hand_landmarks:
 
         for hand_landmarks in results.hand_landmarks:
 
-            # Ponta do dedo indicador
+            # Ponta do indicador (8) e ponta do polegar (4)
             index_tip = hand_landmarks[8]
+            thumb_tip = hand_landmarks[4]
 
-            # Coordenadas normalizadas para a tela
-            hand_x = int(
-                index_tip.x * GAME_WIDTH
+            # Coordenadas na tela do indicador
+            hand_x = int(index_tip.x * GAME_WIDTH)
+            hand_y = int(index_tip.y * GAME_HEIGHT)
+
+            # Verifica de qual lado da linha do meio (GAME_WIDTH / 2) a mão está
+            meio_tela = GAME_WIDTH / 2
+            lado_esquerdo = hand_x < meio_tela
+
+            # Calcula a distância entre polegar e indicador (normalizada de 0 a 1)
+            distancia_pinca = math.hypot(
+                thumb_tip.x - index_tip.x,
+                thumb_tip.y - index_tip.y
             )
 
-            hand_y = int(
-                index_tip.y * GAME_HEIGHT
-            )
-
+            # Se a distância for menor que 0.05, consideramos a pinça fechada
+            pinca_fechada = distancia_pinca < 0.05
 
             # Verifica os 4 quadrados
             for key, c in corners.items():
@@ -394,29 +414,33 @@ def update_frame():
                 )
 
                 if dentro_x and dentro_y:
-                    c['active'] = True
+                    # Regra de divisão por lado (Exemplo: cantos esquerdos exigem mão no lado esquerdo, direitos no direito)
+                    e_lado_correto = (lado_esquerdo and 'Left' in key) or (not lado_esquerdo and 'Right' in key)
+                    
+                    if e_lado_correto:
+                        c['active'] = True
+                        if pinca_fechada:
+                            pinca_atual_frame[key] = True
 
 
     # --------------------------------------------------------
-    # CONTROLE DAS TECLAS
+    # CONTROLE DAS TECLAS (Pressionar e Segurar com KeyDown / KeyUp)
     # --------------------------------------------------------
 
     for key, c in corners.items():
-
-        is_active = c['active']
         key_to_press = KEY_MAP[key]
+        pin_ativa = pinca_atual_frame[key]
 
-
-        if is_active and not last_states[key]:
-
-            pyautogui.keyDown(key_to_press)
-            last_states[key] = True
-
-
-        elif not is_active and last_states[key]:
-
-            pyautogui.keyUp(key_to_press)
-            last_states[key] = False
+        if pin_ativa:
+            # Se a pinça está ativa e a tecla não estava pressionada, aperta (keyDown)
+            if not last_states[key]:
+                pyautogui.keyDown(key_to_press)
+                last_states[key] = True
+        else:
+            # Se a pinça foi desfeita e a tecla estava pressionada, solta (keyUp)
+            if last_states[key]:
+                pyautogui.keyUp(key_to_press)
+                last_states[key] = False
 
 
     # --------------------------------------------------------
@@ -479,7 +503,6 @@ def update_frame():
             )
 
 
-        # Evita preto puro porque ele é transparente
         mask = np.all(
             crop == 0,
             axis=2
@@ -488,7 +511,6 @@ def update_frame():
         crop[mask] = [1, 1, 1]
 
 
-        # Converte para imagem do Tkinter
         img = Image.fromarray(crop)
 
         tk_images[key] = ImageTk.PhotoImage(
