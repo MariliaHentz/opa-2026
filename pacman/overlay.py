@@ -16,7 +16,6 @@ from mediapipe.tasks.python import vision
 
 pyautogui.PAUSE = 0.0
 
-# Inicializa Tkinter para pegar a resolução real do monitor
 root = tk.Tk()
 SCREEN_WIDTH = root.winfo_screenwidth()
 SCREEN_HEIGHT = root.winfo_screenheight()
@@ -24,16 +23,23 @@ SCREEN_HEIGHT = root.winfo_screenheight()
 CENTER_X = SCREEN_WIDTH // 2
 CENTER_Y = SCREEN_HEIGHT // 2
 
-BOX_SIZE = 260       # TAMANHO AUMENTADO (era 180)
-MARGIN = 15         # Distância da borda da tela
+# ------------------------------------------------------------
+# DIMENSÕES DOS BLOCOS (LARGURA x ALTURA)
+# ------------------------------------------------------------
+BOX_WIDTH = 380      # <--- AUMENTE AQUI para deixar mais largo na horizontal!
+BOX_HEIGHT = 240     # Mantém a altura atual do bloco
+
+MARGIN = 15          # Distância da borda da tela
 
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 
+# Escala do campo de visão da câmera
+CAMERA_FOV_SCALE = 2.0  
+
 DETECTION_WIDTH = 480
 DETECTION_HEIGHT = 270
 
-# Latência reduzida para resposta imediata
 FRAME_DELAY = 15
 DETECTION_EVERY_N_FRAMES = 1
 
@@ -60,7 +66,7 @@ if not os.path.exists(MODEL_PATH):
 
 
 # ============================================================
-# MEDIAPIPE (SENSIBILIDADE AJUSTADA)
+# MEDIAPIPE
 # ============================================================
 
 base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
@@ -68,8 +74,8 @@ options = vision.HandLandmarkerOptions(
     base_options=base_options,
     running_mode=vision.RunningMode.VIDEO,
     num_hands=2,
-    min_hand_detection_confidence=0.3,    # Mais sensível para detectar a mão
-    min_hand_presence_confidence=0.3,     # Mantém o rastreio mesmo em movimento rápido
+    min_hand_detection_confidence=0.3,
+    min_hand_presence_confidence=0.3,
     min_tracking_confidence=0.3
 )
 detector = vision.HandLandmarker.create_from_options(options)
@@ -87,44 +93,40 @@ KEY_MAP = {
 }
 
 corners = {
-    # Cima: Topo no Meio
     'up': {
-        'x': CENTER_X - BOX_SIZE // 2,
+        'x': CENTER_X - BOX_WIDTH // 2,
         'y': MARGIN,
-        'w': BOX_SIZE,
-        'h': BOX_SIZE,
+        'w': BOX_WIDTH,
+        'h': BOX_HEIGHT,
         'rgb': (0, 255, 0),
-        'hex': '#00FF00',    # Verde
+        'hex': '#00FF00',
         'active': False
     },
-    # Baixo: Fundo no Meio
     'down': {
-        'x': CENTER_X - BOX_SIZE // 2,
-        'y': SCREEN_HEIGHT - BOX_SIZE - MARGIN,
-        'w': BOX_SIZE,
-        'h': BOX_SIZE,
+        'x': CENTER_X - BOX_WIDTH // 2,
+        'y': SCREEN_HEIGHT - BOX_HEIGHT - MARGIN,
+        'w': BOX_WIDTH,
+        'h': BOX_HEIGHT,
         'rgb': (255, 0, 0),
-        'hex': '#FF0000',    # Vermelho
+        'hex': '#FF0000',
         'active': False
     },
-    # Esquerda: Lateral Esquerda no Meio
     'left': {
         'x': MARGIN,
-        'y': CENTER_Y - BOX_SIZE // 2,
-        'w': BOX_SIZE,
-        'h': BOX_SIZE,
+        'y': CENTER_Y - BOX_HEIGHT // 2,
+        'w': BOX_WIDTH,
+        'h': BOX_HEIGHT,
         'rgb': (255, 255, 0),
-        'hex': '#FFFF00',    # Amarelo
+        'hex': '#FFFF00',
         'active': False
     },
-    # Direita: Lateral Direita no Meio
     'right': {
-        'x': SCREEN_WIDTH - BOX_SIZE - MARGIN,
-        'y': CENTER_Y - BOX_SIZE // 2,
-        'w': BOX_SIZE,
-        'h': BOX_SIZE,
+        'x': SCREEN_WIDTH - BOX_WIDTH - MARGIN,
+        'y': CENTER_Y - BOX_HEIGHT // 2,
+        'w': BOX_WIDTH,
+        'h': BOX_HEIGHT,
         'rgb': (0, 136, 255),
-        'hex': '#0088FF',    # Azul
+        'hex': '#0088FF',
         'active': False
     }
 }
@@ -156,10 +158,12 @@ root.geometry(f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}+0+0")
 root.overrideredirect(True)
 root.wm_attributes("-topmost", True)
 
-# Cor de transparência para o restante da tela
 TRANS_COLOR = '#000001'
 root.config(bg=TRANS_COLOR)
 root.wm_attributes("-transparentcolor", TRANS_COLOR)
+
+WINDOW_OPACITY = 0.60  
+root.wm_attributes("-alpha", WINDOW_OPACITY)
 
 
 # ============================================================
@@ -193,23 +197,20 @@ ARROWS = {
 }
 
 for key, c in corners.items():
-    # Fundo com imagem da câmera
     canvas_image_ids[key] = canvas.create_image(c['x'], c['y'], anchor='nw')
 
-    # Borda colorida
     canvas_rect_ids[key] = canvas.create_rectangle(
         c['x'], c['y'],
         c['x'] + c['w'], c['y'] + c['h'],
         outline=c['hex'], width=5
     )
 
-    # Seta maior e centralizada
     canvas_text_ids[key] = canvas.create_text(
         c['x'] + c['w'] // 2,
         c['y'] + c['h'] // 2,
         text=ARROWS[key],
         fill=c['hex'],
-        font=("Arial", 90, "bold")
+        font=("Arial", 80, "bold")
     )
 
 
@@ -234,7 +235,6 @@ root.bind("<Escape>", on_close)
 # LOOP PRINCIPAL
 # ============================================================
 
-# Pontos de contato da mão: Polegar(4), Indicador(8), Médio(12), Anelar(16), Mindinho(20) e Centro da Palma(9)
 HAND_TOUCH_POINTS = [4, 8, 12, 16, 20, 9]
 
 def update_frame():
@@ -267,7 +267,7 @@ def update_frame():
     for key in corners:
         corners[key]['active'] = False
 
-    # Detecção multi-pontos da mão (ultra responsivo)
+    # Detecção multi-pontos da mão
     if results is not None and results.hand_landmarks:
         for hand_landmarks in results.hand_landmarks:
             for pt_id in HAND_TOUCH_POINTS:
@@ -291,23 +291,38 @@ def update_frame():
             pyautogui.keyUp(key_to_press)
             last_states[key] = False
 
-    # Redimensiona para resolução da tela e recorta as posições corretas
-    display_frame = cv2.resize(frame, (SCREEN_WIDTH, SCREEN_HEIGHT), interpolation=cv2.INTER_LINEAR)
-    frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+    # Renderização da câmera nas caixas
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    h_cam, w_cam, _ = frame_rgb.shape
 
     for key, c in corners.items():
-        crop = frame_rgb[c['y']:c['y'] + c['h'], c['x']:c['x'] + c['w']].copy()
+        center_cam_x = int((c['x'] + c['w'] / 2) / SCREEN_WIDTH * w_cam)
+        center_cam_y = int((c['y'] + c['h'] / 2) / SCREEN_HEIGHT * h_cam)
+
+        crop_w = int((c['w'] / SCREEN_WIDTH * w_cam) * CAMERA_FOV_SCALE)
+        crop_h = int((c['h'] / SCREEN_HEIGHT * h_cam) * CAMERA_FOV_SCALE)
+
+        x1 = max(0, center_cam_x - crop_w // 2)
+        y1 = max(0, center_cam_y - crop_h // 2)
+        x2 = min(w_cam, x1 + crop_w)
+        y2 = min(h_cam, y1 + crop_h)
+
+        crop = frame_rgb[y1:y2, x1:x2]
+        
+        if crop.size != 0:
+            crop = cv2.resize(crop, (c['w'], c['h']), interpolation=cv2.INTER_LINEAR)
+        else:
+            crop = np.zeros((c['h'], c['w'], 3), dtype=np.uint8)
 
         if c['active']:
             overlay_color = np.full_like(crop, c['rgb'])
-            crop = cv2.addWeighted(crop, 0.6, overlay_color, 0.4, 0)
+            crop = cv2.addWeighted(crop, 0.5, overlay_color, 0.5, 0)
             canvas.itemconfig(canvas_rect_ids[key], outline="#FFFFFF", width=7)
             canvas.itemconfig(canvas_text_ids[key], fill="white")
         else:
             canvas.itemconfig(canvas_rect_ids[key], outline=c['hex'], width=5)
             canvas.itemconfig(canvas_text_ids[key], fill=c['hex'])
 
-        # Atualiza o frame do vídeo
         img_pil = Image.fromarray(crop)
         img_tk = ImageTk.PhotoImage(image=img_pil)
         tk_images[key] = img_tk
