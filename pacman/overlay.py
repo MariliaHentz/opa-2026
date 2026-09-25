@@ -1,14 +1,11 @@
 import os
 import time
-import urllib.request
 import cv2
 import numpy as np
 import tkinter as tk
 from PIL import Image, ImageTk
 import pyautogui
 import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 
 # ============================================================
 # CONFIGURAÇÕES
@@ -23,66 +20,34 @@ SCREEN_HEIGHT = root.winfo_screenheight()
 CENTER_X = SCREEN_WIDTH // 2
 CENTER_Y = SCREEN_HEIGHT // 2
 
-# ------------------------------------------------------------
-# DIMENSÕES DOS BLOCOS (LARGURA x ALTURA)
-# ------------------------------------------------------------
-BOX_WIDTH = 380      # <--- AUMENTE AQUI para deixar mais largo na horizontal!
-BOX_HEIGHT = 240     # Mantém a altura atual do bloco
-
-MARGIN = 15          # Distância da borda da tela
+# Dimensões dos blocos
+BOX_WIDTH = 380
+BOX_HEIGHT = 240
+MARGIN = 15
 
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
-
-# Escala do campo de visão da câmera
 CAMERA_FOV_SCALE = 2.0  
 
 DETECTION_WIDTH = 480
 DETECTION_HEIGHT = 270
 
 FRAME_DELAY = 15
-DETECTION_EVERY_N_FRAMES = 1
-
-frame_counter = 0
-last_results = None
-last_timestamp = 0
-
-
-# ============================================================
-# MODELO MEDIAPIPE
-# ============================================================
-
-MODEL_URL = (
-    "https://storage.googleapis.com/mediapipe-models/"
-    "hand_landmarker/hand_landmarker/float16/1/"
-    "hand_landmarker.task"
-)
-MODEL_PATH = "hand_landmarker.task"
-
-if not os.path.exists(MODEL_PATH):
-    print("Baixando modelo do MediaPipe...")
-    urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-    print("Download concluído!")
-
 
 # ============================================================
 # MEDIAPIPE
 # ============================================================
 
-base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
-options = vision.HandLandmarkerOptions(
-    base_options=base_options,
-    running_mode=vision.RunningMode.VIDEO,
-    num_hands=2,
-    min_hand_detection_confidence=0.3,
-    min_hand_presence_confidence=0.3,
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(
+    max_num_hands=2,
+    model_complexity=0,
+    min_detection_confidence=0.3,
     min_tracking_confidence=0.3
 )
-detector = vision.HandLandmarker.create_from_options(options)
-
 
 # ============================================================
-# TECLAS E POSICIONAMENTO DAS BORDAS (CRUZ)
+# TECLAS E POSICIONAMENTO DAS BORDAS
 # ============================================================
 
 KEY_MAP = {
@@ -133,7 +98,6 @@ corners = {
 
 last_states = {key: False for key in KEY_MAP}
 
-
 # ============================================================
 # CÂMERA
 # ============================================================
@@ -145,9 +109,8 @@ cap.set(cv2.CAP_PROP_FPS, 60)
 
 if not cap.isOpened():
     print("ERRO: Não foi possível abrir a câmera!")
-    detector.close()
+    hands.close()
     exit()
-
 
 # ============================================================
 # JANELA TRANSPARENTE
@@ -165,7 +128,6 @@ root.wm_attributes("-transparentcolor", TRANS_COLOR)
 WINDOW_OPACITY = 0.60  
 root.wm_attributes("-alpha", WINDOW_OPACITY)
 
-
 # ============================================================
 # CANVAS
 # ============================================================
@@ -178,7 +140,6 @@ canvas = tk.Canvas(
     highlightthickness=0
 )
 canvas.pack(fill="both", expand=True)
-
 
 # ============================================================
 # ELEMENTOS VISUAIS
@@ -213,9 +174,8 @@ for key, c in corners.items():
         font=("Arial", 80, "bold")
     )
 
-
 # ============================================================
-# FECHAR (Pressione ESC)
+# FECHAR
 # ============================================================
 
 def on_close(event=None):
@@ -225,11 +185,10 @@ def on_close(event=None):
             last_states[key] = False
 
     cap.release()
-    detector.close()
+    hands.close()
     root.destroy()
 
 root.bind("<Escape>", on_close)
-
 
 # ============================================================
 # LOOP PRINCIPAL
@@ -238,8 +197,6 @@ root.bind("<Escape>", on_close)
 HAND_TOUCH_POINTS = [4, 8, 12, 16, 20, 9]
 
 def update_frame():
-    global last_timestamp, frame_counter, last_results
-
     ret, frame = cap.read()
     if not ret:
         root.after(30, update_frame)
@@ -251,27 +208,17 @@ def update_frame():
     detection_frame = cv2.resize(frame, (DETECTION_WIDTH, DETECTION_HEIGHT), interpolation=cv2.INTER_LINEAR)
     detection_frame_rgb = cv2.cvtColor(detection_frame, cv2.COLOR_BGR2RGB)
 
-    timestamp = int(time.perf_counter() * 1000)
-    if timestamp <= last_timestamp:
-        timestamp = last_timestamp + 1
-    last_timestamp = timestamp
-
-    frame_counter += 1
-    if last_results is None or frame_counter % DETECTION_EVERY_N_FRAMES == 0:
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=detection_frame_rgb)
-        last_results = detector.detect_for_video(mp_image, timestamp)
-
-    results = last_results
+    results = hands.process(detection_frame_rgb)
 
     # Reset de status
     for key in corners:
         corners[key]['active'] = False
 
     # Detecção multi-pontos da mão
-    if results is not None and results.hand_landmarks:
-        for hand_landmarks in results.hand_landmarks:
+    if results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks:
             for pt_id in HAND_TOUCH_POINTS:
-                pt = hand_landmarks[pt_id]
+                pt = hand_landmarks.landmark[pt_id]  # Acesso aos landmarks
                 hand_x = int(pt.x * SCREEN_WIDTH)
                 hand_y = int(pt.y * SCREEN_HEIGHT)
 
@@ -279,7 +226,7 @@ def update_frame():
                     if (c['x'] <= hand_x <= c['x'] + c['w']) and (c['y'] <= hand_y <= c['y'] + c['h']):
                         c['active'] = True
 
-    # Pressionamento das teclas
+    # Pressionamento das teclas via PyAutoGUI
     for key, c in corners.items():
         is_active = c['active']
         key_to_press = KEY_MAP[key]
@@ -330,9 +277,8 @@ def update_frame():
 
     root.after(FRAME_DELAY, update_frame)
 
-
 # ============================================================
-# INICIA
+# INICIALIZAÇÃO
 # ============================================================
 
 root.after(0, update_frame)
