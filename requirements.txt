@@ -1,6 +1,6 @@
-opencv-python>=4.8.0
-mediapipe>=0.10.0
+mediapipe==0.10.14
+numpy<2
+opencv-python<=4.10.0.84
 pygame>=2.5.0
 pyautogui>=0.9.54
 Pillow>=10.0.0
-numpy>=1.24.0
