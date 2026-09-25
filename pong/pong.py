@@ -20,8 +20,6 @@ WHITE = (255, 255, 255)
 GREEN = (0, 255, 0)
 RED = (255, 0, 0)
 GRAY = (100, 100, 100)
-DARK_GRAY = (40, 40, 40)
-LIGHT_GRAY = (180, 180, 180)
 
 # --- CONFIGURAÇÃO DO MEDIAPIPE ---
 mp_hands = mp.solutions.hands
@@ -75,14 +73,6 @@ game_mode = 1
 
 font = pygame.font.SysFont("Courier New", 50, bold=True)
 small_font = pygame.font.SysFont("Courier New", 24, bold=True)
-button_font = pygame.font.SysFont("Courier New", 18, bold=True)
-
-# Retângulos dos Botões da Interface de Jogo
-btn_pause_rect = pygame.Rect(WIDTH - 190, 15, 80, 32)
-btn_menu_rect = pygame.Rect(WIDTH - 95, 15, 80, 32)
-
-# Retângulo do Botão Sair no Menu
-btn_quit_menu_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 120, 200, 45)
 
 
 def draw_hand_landmarks(surface, landmarks_list):
@@ -106,44 +96,6 @@ def draw_hand_landmarks(surface, landmarks_list):
                 pygame.draw.circle(surface, RED, pt, 6)
             else:
                 pygame.draw.circle(surface, GREEN, pt, 4)
-
-
-def draw_ui_buttons(surface):
-    """Desenha os botões interativos de Pause e Menu durante a partida."""
-    mouse_pos = pygame.mouse.get_pos()
-
-    # Botão Pause
-    pause_color = (
-        LIGHT_GRAY if btn_pause_rect.collidepoint(mouse_pos) else DARK_GRAY
-    )
-    pygame.draw.rect(surface, pause_color, btn_pause_rect, border_radius=5)
-    pygame.draw.rect(surface, WHITE, btn_pause_rect, 2, border_radius=5)
-    p_text = "RES" if is_paused else "PAUSE"
-    p_render = button_font.render(p_text, True, WHITE)
-    surface.blit(
-        p_render,
-        (
-            btn_pause_rect.x + (btn_pause_rect.width - p_render.get_width()) // 2,
-            btn_pause_rect.y
-            + (btn_pause_rect.height - p_render.get_height()) // 2,
-        ),
-    )
-
-    # Botão Menu
-    menu_color = (
-        LIGHT_GRAY if btn_menu_rect.collidepoint(mouse_pos) else DARK_GRAY
-    )
-    pygame.draw.rect(surface, menu_color, btn_menu_rect, border_radius=5)
-    pygame.draw.rect(surface, WHITE, btn_menu_rect, 2, border_radius=5)
-    m_render = button_font.render("MENU", True, WHITE)
-    surface.blit(
-        m_render,
-        (
-            btn_menu_rect.x + (btn_menu_rect.width - m_render.get_width()) // 2,
-            btn_menu_rect.y
-            + (btn_menu_rect.height - m_render.get_height()) // 2,
-        ),
-    )
 
 
 def reset_point(winner_direction=1):
@@ -184,7 +136,6 @@ while running:
     # ---------------------------------------------------------
     if game_state == "MENU":
         screen.fill(BLACK)
-        mouse_pos = pygame.mouse.get_pos()
 
         title_render = font.render("PONG IA", True, WHITE)
         option1_render = small_font.render(
@@ -217,34 +168,9 @@ while running:
             ),
         )
 
-        # Desenhar Botão Clicável de Sair
-        btn_quit_color = (
-            LIGHT_GRAY
-            if btn_quit_menu_rect.collidepoint(mouse_pos)
-            else DARK_GRAY
-        )
-        pygame.draw.rect(
-            screen, btn_quit_color, btn_quit_menu_rect, border_radius=8
-        )
-        pygame.draw.rect(screen, WHITE, btn_quit_menu_rect, 2, border_radius=8)
-        quit_txt_render = button_font.render("SAIR DO JOGO", True, WHITE)
-        screen.blit(
-            quit_txt_render,
-            (
-                btn_quit_menu_rect.x
-                + (btn_quit_menu_rect.width - quit_txt_render.get_width()) // 2,
-                btn_quit_menu_rect.y
-                + (btn_quit_menu_rect.height - quit_txt_render.get_height())
-                // 2,
-            ),
-        )
-
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if btn_quit_menu_rect.collidepoint(event.pos):
-                    running = False
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_1:
                     game_mode = 1
@@ -267,7 +193,7 @@ while running:
 
         current_landmarks = None
 
-        # 1. Processamento da Visão Computacional
+        # Processamento da Visão Computacional
         success, frame = cap.read()
         if success and not game_over and not is_paused:
             frame = cv2.flip(frame, 1)
@@ -293,7 +219,7 @@ while running:
                         else:
                             p2_y = max(0, min(HEIGHT - paddle_height, target_y))
 
-        # Movimento da IA (1 Jogador)
+        # Movimento da IA
         if game_mode == 1 and not game_over and not is_paused:
             ai_speed = 7.0  # Velocidade ajustada da CPU
             paddle_center = p2_y + paddle_height // 2
@@ -304,16 +230,10 @@ while running:
 
             p2_y = max(0, min(HEIGHT - paddle_height, p2_y))
 
-        # 2. Eventos do Pygame
+        # Eventos do Pygame
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if btn_pause_rect.collidepoint(event.pos) and not game_over:
-                    is_paused = not is_paused
-                elif btn_menu_rect.collidepoint(event.pos):
-                    game_state = "MENU"
-
             elif event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_p, pygame.K_SPACE) and not game_over:
                     is_paused = not is_paused
@@ -322,7 +242,7 @@ while running:
                 elif game_over and event.key == pygame.K_r:
                     reset_game()
 
-        # 3. Lógica Física do Jogo
+        # Lógica Física do Jogo
         if not game_over and not is_paused:
             if ball_speed_x < MAX_BALL_SPEED:
                 ball_speed_x += BALL_ACCELERATION
@@ -377,7 +297,7 @@ while running:
                     else "Jogador 2 Venceu!"
                 )
 
-        # 4. Renderização
+        # Renderização
         screen.fill(BLACK)
 
         if current_landmarks:
@@ -402,9 +322,6 @@ while running:
         # Placar
         score_text = font.render(f"{p1_score}     {p2_score}", True, WHITE)
         screen.blit(score_text, (WIDTH // 2 - score_text.get_width() // 2, 30))
-
-        # Desenhar Botões UI
-        draw_ui_buttons(screen)
 
         # Overlay de Pause
         if is_paused and not game_over:
@@ -461,4 +378,4 @@ while running:
 # --- ENCERRAMENTO ---
 cap.release()
 pygame.quit()
-sys.exit()222
+sys.exit()
