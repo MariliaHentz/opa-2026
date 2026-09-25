@@ -1,3 +1,4 @@
+import math
 import random
 import sys
 import cv2
@@ -47,18 +48,20 @@ p2_x = WIDTH - 50
 p2_y = HEIGHT // 2 - paddle_height // 2
 
 # Velocidades e Aceleração
-INITIAL_BASE_SPEED = 8.0
-MAX_BALL_SPEED = 22.0
-BALL_ACCELERATION = 0.005
+INITIAL_BASE_SPEED = 12.0
+MAX_BALL_SPEED = 26.0
+BALL_ACCELERATION = 0.006
+HIT_ACCELERATION = 0.8
+MAX_BOUNCE_ANGLE = math.radians(60)
 
-ball_speed_x = INITIAL_BASE_SPEED
-ball_speed_y = INITIAL_BASE_SPEED
+ball_speed = INITIAL_BASE_SPEED
 
 # Bola
 ball_x = WIDTH // 2
 ball_y = HEIGHT // 2
-ball_vel_x = -ball_speed_x * random.choice((1, -1))
-ball_vel_y = -ball_speed_y * random.choice((1, -1))
+initial_angle = random.uniform(-math.radians(25), math.radians(25))
+ball_vel_x = -ball_speed * math.cos(initial_angle) * random.choice((1, -1))
+ball_vel_y = ball_speed * math.sin(initial_angle)
 
 # Placar e Controle de Estado
 p1_score = 0
@@ -100,19 +103,19 @@ def draw_hand_landmarks(surface, landmarks_list):
 
 def reset_point(winner_direction=1):
     """Reinicia a bola e define a velocidade base (com acelerador pós-3 pontos)."""
-    global ball_x, ball_y, ball_speed_x, ball_speed_y, ball_vel_x, ball_vel_y
+    global ball_x, ball_y, ball_speed, ball_vel_x, ball_vel_y
 
     total_score = p1_score + p2_score
     if total_score >= 3:
-        current_base = INITIAL_BASE_SPEED * 1.5
+        current_base = INITIAL_BASE_SPEED * 1.4
     else:
         current_base = INITIAL_BASE_SPEED
 
-    ball_speed_x = current_base
-    ball_speed_y = current_base
+    ball_speed = current_base
     ball_x, ball_y = WIDTH // 2, HEIGHT // 2
-    ball_vel_x = winner_direction * ball_speed_x
-    ball_vel_y = ball_speed_y * random.choice((1, -1))
+    angle = random.uniform(-math.radians(25), math.radians(25))
+    ball_vel_x = winner_direction * ball_speed * math.cos(angle)
+    ball_vel_y = ball_speed * math.sin(angle)
 
 
 def reset_game():
@@ -221,7 +224,7 @@ while running:
 
         # Movimento da IA
         if game_mode == 1 and not game_over and not is_paused:
-            ai_speed = 7.0  # Velocidade ajustada da CPU
+            ai_speed = 9.5
             paddle_center = p2_y + paddle_height // 2
             if paddle_center < ball_y:
                 p2_y += ai_speed
@@ -244,20 +247,23 @@ while running:
 
         # Lógica Física do Jogo
         if not game_over and not is_paused:
-            if ball_speed_x < MAX_BALL_SPEED:
-                ball_speed_x += BALL_ACCELERATION
-                ball_speed_y += BALL_ACCELERATION
-
-            current_dir_x = 1 if ball_vel_x > 0 else -1
-            current_dir_y = 1 if ball_vel_y > 0 else -1
-            ball_vel_x = current_dir_x * ball_speed_x
-            ball_vel_y = current_dir_y * ball_speed_y
+            if ball_speed < MAX_BALL_SPEED:
+                ball_speed += BALL_ACCELERATION
+                current_magnitude = math.hypot(ball_vel_x, ball_vel_y)
+                if current_magnitude > 0:
+                    scale = ball_speed / current_magnitude
+                    ball_vel_x *= scale
+                    ball_vel_y *= scale
 
             ball_x += ball_vel_x
             ball_y += ball_vel_y
 
             # Colisão Teto / Chão
-            if ball_y <= 0 or ball_y >= HEIGHT - ball_size:
+            if ball_y <= 0:
+                ball_y = 0
+                ball_vel_y *= -1
+            elif ball_y >= HEIGHT - ball_size:
+                ball_y = HEIGHT - ball_size
                 ball_vel_y *= -1
 
             p1_rect = pygame.Rect(p1_x, p1_y, paddle_width, paddle_height)
@@ -265,23 +271,39 @@ while running:
             ball_rect = pygame.Rect(ball_x, ball_y, ball_size, ball_size)
 
             # Colisão com Raquete 1
-            if ball_rect.colliderect(p1_rect):
-                ball_vel_x = abs(ball_vel_x)
+            if ball_rect.colliderect(p1_rect) and ball_vel_x < 0:
                 ball_x = p1_x + paddle_width
-                ball_speed_x += 0.3
+                relative_intersect = (
+                    ball_y + ball_size / 2
+                ) - (p1_y + paddle_height / 2)
+                normalized_intersect = relative_intersect / (paddle_height / 2)
+                normalized_intersect = max(-1.0, min(1.0, normalized_intersect))
+                bounce_angle = normalized_intersect * MAX_BOUNCE_ANGLE
+
+                ball_speed = min(MAX_BALL_SPEED, ball_speed + HIT_ACCELERATION)
+                ball_vel_x = ball_speed * math.cos(bounce_angle)
+                ball_vel_y = ball_speed * math.sin(bounce_angle)
 
             # Colisão com Raquete 2
-            if ball_rect.colliderect(p2_rect):
-                ball_vel_x = -abs(ball_vel_x)
+            if ball_rect.colliderect(p2_rect) and ball_vel_x > 0:
                 ball_x = p2_x - ball_size
-                ball_speed_x += 0.3
+                relative_intersect = (
+                    ball_y + ball_size / 2
+                ) - (p2_y + paddle_height / 2)
+                normalized_intersect = relative_intersect / (paddle_height / 2)
+                normalized_intersect = max(-1.0, min(1.0, normalized_intersect))
+                bounce_angle = normalized_intersect * MAX_BOUNCE_ANGLE
+
+                ball_speed = min(MAX_BALL_SPEED, ball_speed + HIT_ACCELERATION)
+                ball_vel_x = -ball_speed * math.cos(bounce_angle)
+                ball_vel_y = ball_speed * math.sin(bounce_angle)
 
             # Pontuação
             if ball_x <= 0:
                 p2_score += 1
                 reset_point(winner_direction=1)
 
-            elif ball_x >= WIDTH:
+            elif ball_x >= WIDTH - ball_size:
                 p1_score += 1
                 reset_point(winner_direction=-1)
 
